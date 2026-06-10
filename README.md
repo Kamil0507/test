@@ -1,194 +1,143 @@
-# Analiza projektu RentOpinion — odpowiedzi na pytania
+# Analiza projektu RentOpinion — pytania i odpowiedzi
 
-Projekt **RentOpinion** to portal z recenzjami wynajmowanych mieszkań, zbudowany w Laravel (PHP 8.5 / Laravel 13) z widokami Blade i bazą SQLite. Uwierzytelnianie oparte jest na Laravel Breeze.
+RentOpinion to strona internetowa, na której najemcy wystawiają opinie o wynajmowanych mieszkaniach i o wynajmujących. Można dodać ogłoszenie, przeglądać oferty na liście i na mapie, a także napisać recenzję. Projekt napisano w technologii Laravel (język PHP), dane trzyma w bazie SQLite, a wygląd stron robią szablony Blade.
+
+Poniżej każde pytanie w pełnym brzmieniu i odpowiedź wytłumaczona możliwie prosto.
 
 ---
 
-## 1. Struktura bazy danych + przykładowa tabela i dane początkowe
+## 1. Jak przygotowano strukturę bazy danych? Wskaż przykładową tabelę, opisz jej najważniejsze pola i wyjaśnij, skąd biorą się przykładowe/początkowe dane.
 
-Strukturę przygotowano w mechanizmie **migracji** Laravela (`database/migrations/`). Każda tabela ma osobny plik z metodą `up()` (tworzenie) i `down()` (wycofanie). Są cztery główne tabele domenowe: `users`, `properties`, `property_images`, `reviews` — plus tabele systemowe (`sessions`, `cache`, `jobs`, `password_reset_tokens`).
+Bazę danych zbudowano za pomocą tzw. migracji. Migracja to po prostu plik z przepisem: „utwórz taką tabelę, z takimi kolumnami". Dzięki temu każdy, kto pobierze projekt, jednym poleceniem odtworzy całą bazę od zera — nie trzeba jej klikać ręcznie. W projekcie są cztery główne tabele: użytkownicy (`users`), ogłoszenia (`properties`), zdjęcia ogłoszeń (`property_images`) i recenzje (`reviews`).
 
-Przykład — tabela **`reviews`** (`2024_01_01_000004_create_reviews_table.php`). Najważniejsze pola:
+Weźmy tabelę **recenzji**. Przechowuje ona m.in.: do którego ogłoszenia należy recenzja, kto ją napisał, oceny w skali 1–5 (osobno za standard, kontakt z właścicielem, sąsiedztwo, okolicę, cenę), tytuł, treść, a także informacje dla administratora — czy recenzja jest zweryfikowana i czy została ukryta.
+
+Trzy rzeczy warte podkreślenia, bo to one decydują o porządku w danych:
+
+- jest reguła pilnująca, że **jedna osoba może dodać tylko jedną recenzję do danego ogłoszenia** (nie da się zaspamować jednej oferty),
+- jeśli usunie się ogłoszenie, **jego recenzje znikają razem z nim** (nie zostają „sieroty" bez ogłoszenia),
+- usunięcie recenzji to tak naprawdę tylko jej **schowanie** (zostaje w bazie z datą usunięcia), więc nic nie ginie bezpowrotnie.
+
+Skąd biorą się dane na start? Z dwóch źródeł. Pierwsze to tzw. seedery — gotowe paczki danych wpisywane przy uruchomieniu projektu (np. konto administratora `admin@rentopinion.pl` i kilka przykładowych ogłoszeń z polskich miast). Drugie to fabryki, które generują dużo losowych, ale sensownych danych (np. losowe oceny i polskie teksty recenzji) — używa się ich głównie do testów.
+
+---
+
+## 2. Jak projekt zabezpiecza formularze przed niepożądanym lub przypadkowym wysłaniem danych z zewnątrz? Wskaż konkretny formularz i opisz mechanizm.
+
+Chodzi o ochronę przed sytuacją, w której obca strona internetowa próbuje „w tle" wysłać formularz w imieniu zalogowanego użytkownika (atak typu CSRF). Zabezpieczeniem jest tzw. token CSRF — można go porównać do tajnego znaczka, który strona wkłada do każdego swojego formularza.
+
+W praktyce wygląda to tak: w formularzu dodawania recenzji jest jedna linijka `@csrf`, która niewidocznie dokłada ten znaczek do wysyłanych danych. Gdy formularz trafia na serwer, system sprawdza, czy znaczek się zgadza z tym zapisanym w sesji użytkownika. Jeśli tak — żądanie jest przyjmowane. Jeśli nie (bo np. wysłała je obca strona, która znaczka nie zna) — serwer odrzuca je z błędem i nic się nie zapisuje.
+
+Najważniejsze, że ten znaczek zna tylko prawdziwa strona projektu. Obca witryna nie ma jak go zdobyć, więc nie podszyje się pod użytkownika.
+
+---
+
+## 3. Jak aplikacja reaguje na nietypową sytuację? Co zobaczy użytkownik i co dzieje się w kodzie?
+
+Aplikacja przewiduje kilka takich sytuacji:
+
+**Ktoś wchodzi na ogłoszenie, którego nie ma albo które zostało zablokowane.** Wtedy zamiast zawartości pokazuje się strona „nie znaleziono" (błąd 404). Co ważne, zablokowane ogłoszenie też udaje nieistniejące — żeby nie zdradzać, że w ogóle było.
+
+**Ktoś próbuje zrobić coś, do czego nie ma prawa** (np. usunąć cudzą recenzję albo wejść do panelu administratora). Wtedy dostaje stronę „brak dostępu" (błąd 403).
+
+**Konto zostało zablokowane przez administratora.** Przy najbliższej próbie zrobienia czegokolwiek użytkownik jest automatycznie wylogowywany i widzi komunikat: „Twoje konto zostało zablokowane. Skontaktuj się z administratorem."
+
+**Lista jest pusta** (np. brak recenzji). Zamiast pustej, mylącej strony pojawia się zwykły komunikat „brak wyników".
+
+W kodzie odpowiadają za to krótkie „bramki" — np. polecenie „jeśli ogłoszenie jest zablokowane, przerwij i pokaż 404". Użytkownik widzi natomiast albo czytelną stronę błędu, albo zielony/czerwony komunikat na górze ekranu.
+
+---
+
+## 4. Jak aplikacja rozpoznaje, co użytkownik chce zrobić (pobrać dane, edytować, usunąć, utworzyć)? Odnieś się do adresu strony, rodzaju żądania, formularza, ścieżki i fragmentu kodu.
+
+Aplikacja rozpoznaje to po dwóch rzeczach naraz: po **adresie strony** i po **rodzaju żądania**. To trochę jak zamawianie w restauracji — liczy się i to, co mówisz, i jak to mówisz.
+
+Najlepiej widać to na ogłoszeniach:
+
+| Co użytkownik chce zrobić | Rodzaj żądania | Adres |
+|---|---|---|
+| Zobaczyć listę | otwarcie strony (GET) | `/ogloszenia` |
+| Zobaczyć jedno ogłoszenie | otwarcie strony (GET) | `/ogloszenia/{numer}` |
+| Dodać nowe | wysłanie formularza (POST) | `/ogloszenia` |
+| Edytować | aktualizacja (PATCH) | `/ogloszenia/{numer}` |
+| Usunąć | usunięcie (DELETE) | `/ogloszenia/{numer}` |
+
+Ten sam adres `/ogloszenia/{numer}` może więc znaczyć „pokaż", „zmień" albo „usuń" — zależnie od rodzaju żądania. W pliku z trasami (`routes/web.php`) każda taka kombinacja jest przypisana do konkretnej funkcji w kodzie, np.:
 
 ```php
-$table->foreignId('property_id')->constrained()->cascadeOnDelete();
-$table->foreignId('user_id')->constrained()->cascadeOnDelete();
-$table->unsignedTinyInteger('rating_overall');   // ocena 1–5
-$table->unsignedTinyInteger('rating_landlord');
-// ... kolejne oceny cząstkowe
-$table->string('title', 200);
-$table->text('content');
-$table->boolean('is_verified')->default(false);   // moderacja
-$table->boolean('is_hidden')->default(false);
-$table->foreignId('verified_by')->nullable()->constrained('users')->nullOnDelete();
-$table->softDeletes();
-$table->unique(['property_id', 'user_id']);        // jedna recenzja na ogłoszenie
-$table->index(['property_id', 'is_hidden']);
+Route::post('/', [PropertyController::class, 'store'])->name('store'); // dodaj nowe ogłoszenie
 ```
 
-Warto zwrócić uwagę na trzy decyzje: `unique(['property_id','user_id'])` gwarantuje na poziomie bazy, że jeden użytkownik nie wystawi dwóch recenzji tego samego ogłoszenia; `cascadeOnDelete` usuwa recenzje wraz z ogłoszeniem/użytkownikiem; `softDeletes()` powoduje, że rekord nie znika fizycznie, tylko dostaje datę w `deleted_at`.
-
-**Dane początkowe** pochodzą z dwóch źródeł:
-
-- **Seedery** (`database/seeders/`) — uruchamiane przez `php artisan db:seed`. `DatabaseSeeder` wywołuje kolejno `AdminSeeder`, `UserSeeder`, `PropertySeeder`, `ReviewSeeder`. `AdminSeeder` tworzy stałe konto administratora metodą `updateOrCreate` (idempotentnie, więc da się go uruchomić wielokrotnie):
-
-```php
-User::updateOrCreate(
-    ['email' => 'admin@rentopinion.pl'],
-    ['name' => 'Administrator', 'role' => UserRole::Admin,
-     'password' => Hash::make(env('ADMIN_PASSWORD', 'Admin1234!')), ...]
-);
-```
-
-`PropertySeeder` ma zaszytą tablicę realistycznych ogłoszeń z polskich miast (Kraków, Warszawa…).
-
-- **Fabryki** (`database/factories/`) — generują losowe, ale sensowne dane (np. `ReviewFactory` losuje oceny `numberBetween(1,5)` i polskie zdania przez `fake('pl_PL')`). Używane głównie w testach i do masowego zasilania.
+Ciekawostka: przeglądarka z formularza umie wysłać tylko „otwórz" i „wyślij", więc dla „edytuj" i „usuń" projekt dokłada ukryte pole, które mówi serwerowi, o jaką operację naprawdę chodzi.
 
 ---
 
-## 2. Zabezpieczenie formularzy przed wysłaniem „z zewnątrz" (CSRF)
+## 5. Wskaż jedno miejsce, które powinno zostać poprawione technicznie. Opisz problem, jego wpływ i zaproponuj poprawę.
 
-Mechanizmem jest **token CSRF**. Każdy formularz modyfikujący dane zawiera dyrektywę `@csrf`, która renderuje ukryte pole z tokenem sesji. Przykład — formularz dodawania recenzji (`resources/views/properties/_review-form-multi.blade.php`):
+**Problem:** zatwierdzanie (weryfikowanie) recenzji jest zrobione w dwóch miejscach naraz — raz „od strony użytkownika", a raz w panelu administratora. To dwie prawie identyczne funkcje robiące to samo. Dodatkowo ta „użytkownikowa" droga jest dostępna dla każdego zalogowanego, a dopiero w środku sprawdza się, czy to administrator.
 
-```blade
-<form method="POST" action="{{ route('reviews.store', $property) }}" id="review-form">
-    @csrf
-    ...
-</form>
-```
+**Dlaczego to przeszkadza:** gdy kiedyś trzeba będzie coś w tym poprawić, łatwo zmienić jedną wersję, a o drugiej zapomnieć — i zrobi się bałagan. To też niepotrzebne ryzyko: czynność typowo administracyjną lepiej trzymać wyłącznie po stronie administratora.
 
-Globalny middleware web (`VerifyCsrfToken`, domyślnie włączony w stosie `web`) przy każdym żądaniu `POST/PATCH/DELETE` porównuje token z formularza z tokenem zapisanym w sesji użytkownika. Jeśli się nie zgadzają (np. żądanie pochodzi z obcej strony, która nie zna tokenu), Laravel zwraca błąd **419 Page Expired** i żądanie nie dociera do kontrolera. Dzięki temu atakujący nie może spreparować strony, która w tle wyśle formularz w imieniu zalogowanego użytkownika. Token jest powiązany z sesją, więc skuteczne podrobienie wymagałoby jego znajomości — co jest możliwe tylko ze strony serwowanej przez samą aplikację.
+**Propozycja:** zostawić tylko jedną drogę — tę w panelu administratora, chronioną od samego wejścia — a tę drugą usunąć. Mniej kodu, jeden punkt odpowiedzialności, mniejsza szansa na błąd.
+
+(Drobniejszy przykład: licznik „ta recenzja była pomocna" pilnuje pojedynczego kliknięcia tylko przez pamięć przeglądarki, więc wyczyszczenie ciasteczek pozwala kliknąć ponownie. Docelowo warto zapisywać to w bazie.)
 
 ---
 
-## 3. Reakcja na sytuacje nietypowe
+## 6. Gdzie aplikacja sprawdza poprawność danych wpisanych przez użytkownika? Jakie dane są sprawdzane, jakie błędy mogą zostać wykryte i co zobaczy użytkownik?
 
-Aplikacja obsługuje kilka takich przypadków:
+Sprawdzanie danych jest wydzielone do osobnych plików (tzw. Form Requests), a nie wmieszane w resztę kodu. To dobre rozwiązanie, bo wszystkie reguły dla danego formularza są w jednym miejscu. Co ważne, sprawdzenie odbywa się **zanim** dane w ogóle dotrą do głównej logiki — jeśli coś jest nie tak, dalej nic się nie dzieje.
 
-**Nieistniejący lub zablokowany zasób.** W `PropertyController::show` jest jawna instrukcja:
+Na przykładzie recenzji sprawdzane jest m.in.:
 
-```php
-abort_if($property->isBlocked(), 404);
-```
+- czy podano tytuł i treść (treść musi mieć co najmniej 150 znaków, żeby recenzja była konkretna),
+- czy oceny mieszczą się w skali 1–5,
+- czy daty najmu mają sens (koniec nie wcześniej niż początek i nie w przyszłości).
 
-Jeśli ogłoszenie ma status `blocked`, zwykły użytkownik dostaje stronę **404** zamiast podglądu — celowo, aby nie zdradzać, że taki zasób istnieje. Gdy ktoś wejdzie na ID, którego nie ma w bazie, mechanizm **route model binding** sam zgłasza 404 (Laravel nie znajduje rekordu i przerywa).
+Przy dodawaniu ogłoszenia sprawdzany jest też m.in. format kodu pocztowego (XX-XXX) oraz to, czy wgrane zdjęcia naprawdę są obrazkami i nie są za duże.
 
-**Brak uprawnień.** Przy próbie usunięcia cudzej recenzji `$this->authorize('delete', $review)` rzuca wyjątek **403 Forbidden**. Wejście na panel admina bez roli admina — `AdminMiddleware` wywołuje `abort(403, 'Brak dostępu do panelu administracyjnego.')`.
-
-**Konto zablokowane.** `EnsureUserNotBlocked` (middleware globalny) przy każdym żądaniu sprawdza `Auth::user()->isBlocked()`; jeśli tak — wylogowuje, unieważnia sesję i przekierowuje na logowanie z komunikatem o blokadzie.
-
-**Pusta lista wyników.** Widoki list używają warunku `@forelse … @empty`, więc zamiast pustej strony użytkownik widzi czytelny komunikat „brak wyników".
-
-Co widzi użytkownik: w zależności od przypadku to strona błędu 403/404/419 albo komunikat flash (`with('success'…)`, `withErrors(...)`) wyświetlany w layoutie.
+Co widzi użytkownik, gdy się pomyli? Strona nie znika i nie traci wpisanych danych — wraca do formularza z zachowaniem tego, co już napisał, i pokazuje czerwone komunikaty po polsku, np. „Treść recenzji musi mieć co najmniej 150 znaków." Komunikaty są i zbiorczo na górze, i przy konkretnym polu, którego dotyczą.
 
 ---
 
-## 4. Jak aplikacja rozpoznaje intencję użytkownika
+## 7. Wskaż dobrze zorganizowany widok. Dlaczego jest czytelny, czy unika powtórzeń i czy łatwo byłoby go zmienić lub rozbudować?
 
-Rozpoznanie opiera się na **routingu RESTowym** — kombinacji metody HTTP + ścieżki URL, mapowanej na konkretną metodę kontrolera (`routes/web.php`):
+Dobrym przykładem jest **kafelek ogłoszenia** (`property-card`) — czyli ta prostokątna karta ze zdjęciem, ceną, tytułem i miastem, którą widać na liście ofert.
 
-| Intencja | Metoda HTTP | URL | Akcja |
-|---|---|---|---|
-| Wyświetlić listę | GET | `/ogloszenia` | `PropertyController@index` |
-| Wyświetlić szczegóły | GET | `/ogloszenia/{property}` | `PropertyController@show` |
-| Formularz dodania | GET | `/ogloszenia/dodaj` | `create` |
-| Utworzyć | POST | `/ogloszenia` | `store` |
-| Edytować | PATCH | `/ogloszenia/{property}` | `update` |
-| Usunąć | DELETE | `/ogloszenia/{property}` | `destroy` |
+Jest czytelny, bo każdy element (zdjęcie, cena, tytuł, lokalizacja, parametry) jest wyraźnie oddzielony i podpisany komentarzem — od razu wiadomo, co jest czym.
 
-Ta sama ścieżka `/ogloszenia/{property}` znaczy co innego w zależności od metody (GET = pokaż, PATCH = aktualizuj, DELETE = usuń). Ponieważ przeglądarka z formularza HTML potrafi wysłać tylko GET/POST, do PATCH/DELETE używana jest dyrektywa `@method('PATCH')`/`@method('DELETE')` (ukryte pole `_method`), które Laravel tłumaczy na właściwą metodę.
-
-Ważny szczegół projektu — kolejność tras. Konkretne ścieżki (`/dodaj`, `/dodaj-pokoje`) są zdefiniowane **przed** wildcardem `/{property}`, inaczej Laravel potraktowałby słowo „dodaj" jako wartość `{property}`. Fragment kodu obsługujący np. tworzenie:
-
-```php
-Route::post('/', [PropertyController::class, 'store'])->name('store');
-```
+Co najważniejsze, **nie powtarza się**. Zamiast kopiować kod tej karty na liście ofert, na mapie i na stronie głównej, zrobiono ją raz jako gotowy „klocek" i wstawia się ją jednym wywołaniem: `<x-property-card .../>`. Dzięki temu, jeśli ktoś będzie chciał zmienić wygląd karty (np. dodać oznaczenie „Nowość"), poprawia tylko jeden plik, a zmiana pojawia się od razu wszędzie. To czyni go bardzo łatwym do rozbudowy — dorzucenie nowej informacji to dosłownie jedna linijka. Podobnie zrobiono kartę recenzji i gwiazdki ocen.
 
 ---
 
-## 5. Miejsce do poprawy technicznej
+## 8. Jak aplikacja rozróżnia użytkowników o różnych uprawnieniach? Podaj przykład, gdy jedna osoba może coś zrobić, a inna nie. Jak projekt to kontroluje?
 
-**Problem: niespójna obsługa akcji `verify` na recenzji.** Istnieją dwie niemal identyczne metody weryfikacji — `ReviewController::verify` i `Admin\ReviewModerationController::verify` — pod dwiema różnymi trasami (`reviews.verify` i `admin.reviews.verify`). Dodatkowo trasa zwykłego użytkownika `recenzje/{review}/weryfikuj` jest dostępna dla każdego zalogowanego (chroni ją dopiero `authorize` wewnątrz metody), choć to operacja czysto administracyjna.
+Każdy użytkownik ma przypisaną **rolę**: gość, zwykły użytkownik albo administrator. Po roli aplikacja wie, na co dana osoba może sobie pozwolić.
 
-**Wpływ:** zdublowana logika łatwo się rozjeżdża przy zmianach (poprawisz jedną, zapomnisz drugą), a trasa „użytkownika" wykonująca akcję admina to mylące rozmycie odpowiedzialności i potencjalne ryzyko, jeśli ktoś osłabi Policy.
+Kontrola działa na kilku poziomach, niczym kolejne bramki: najpierw przy wejściu na adres (np. cały panel administratora jest zamknięty dla osób bez roli administratora), a potem przy konkretnych czynnościach (np. „czy ta recenzja na pewno należy do ciebie?").
 
-**Propozycja:** usunąć `verify` z `ReviewController` i z bloku tras użytkownika, a w widoku ogłoszenia kierować przycisk weryfikacji na jedną, administracyjną trasę `admin.reviews.verify`. Wtedy jedna metoda, jeden punkt wejścia, spójna ochrona przez `auth + admin`.
-
-Drugi kandydat (mniejszy): `markHelpful` blokuje wielokrotne kliknięcia tylko przez sesję (`session()->has(...)`) — wyczyszczenie ciasteczek resetuje licznik. Docelowo lepsza byłaby osobna tabela `review_helpful` z parą (review_id, user_id/IP).
+**Konkretny przykład:** użytkownik A napisał recenzję. Tylko on widzi przy niej przycisk „Usuń" i tylko on może ją skasować — bo system sprawdza, czy autor recenzji to ta sama osoba, która klika. Użytkownik B, gdyby spróbował usunąć recenzję A, dostanie „brak dostępu" (403). Wyjątkiem jest administrator — on z założenia może usunąć każdą recenzję, bo do moderacji treści jest powołany. Czyli ta sama czynność („usuń recenzję") jest dozwolona dla autora i dla administratora, a zabroniona dla kogoś obcego. Na tym właśnie polega rozróżnianie uprawnień.
 
 ---
 
-## 6. Walidacja danych wpisanych przez użytkownika
+## 9. Wybierz jedną akcję i opisz krok po kroku drogę danych — od kliknięcia w interfejsie aż po zapis i zwrócenie wyniku. Zidentyfikuj warstwy i dołącz co najmniej 5 fragmentów kodu z podpisami.
 
-Walidacja jest wydzielona do klas **Form Request** (`app/Http/Requests/`), a nie wpisana w kontroler. Laravel uruchamia ją automatycznie, zanim kod kontrolera w ogóle się wykona. Przykład — `StoreMultiCriteriaReviewRequest`:
+Wybieram **dodanie recenzji**. Prześledźmy, co się dzieje od momentu, gdy użytkownik klika „Opublikuj recenzję", aż do chwili, gdy widzi efekt.
 
-```php
-public function rules(): array {
-    return [
-        'title'                  => ['required', 'string', 'min:5', 'max:200'],
-        'content'                => ['required', 'string', 'min:150', 'max:5000'],
-        'rating_overall'         => ['required', 'integer', 'between:1,5'],
-        'rating_landlord'        => ['required', 'integer', 'between:1,5'],
-        'tenancy_end'            => ['nullable','date','before_or_equal:today','after_or_equal:tenancy_start'],
-        // ...
-    ];
-}
-```
+Najprościej mówiąc, dane przechodzą przez taki łańcuch: **formularz → sprawdzenie adresu i uprawnień → sprawdzenie poprawności danych → główna logika → zapis do bazy → odświeżenie strony z wynikiem.**
 
-Sprawdzane są m.in.: obecność i długość tytułu oraz treści (treść min. 150 znaków), zakres ocen 1–5, poprawność i logika dat najmu (koniec nie wcześniej niż początek, nie w przyszłości). W formularzu dodawania ogłoszenia walidowany jest też kod pocztowy regułą `regex:/^\d{2}-\d{3}$/` i pliki zdjęć (`image`, `mimes`, `max:5120`).
-
-Wykrywalne błędy: brak wymaganego pola, za krótka treść, ocena spoza 1–5, zły format kodu pocztowego, niepoprawny plik. Co widzi użytkownik: jeśli dane są błędne, Laravel zawraca go na poprzednią stronę z zachowaniem wpisanych wartości (`old(...)`) i wypełnioną tablicą `$errors`. Widok wyświetla je zbiorczo na górze (`@if($errors->any())`) i przy konkretnych polach (`@error('content')`), z czytelnymi polskimi komunikatami zdefiniowanymi w metodzie `messages()` (np. „Treść recenzji musi mieć co najmniej 150 znaków.").
-
----
-
-## 7. Dobrze zorganizowany widok
-
-Dobrym przykładem jest **komponent `property-card.blade.php`** używany na liście ogłoszeń i na stronie głównej. Jest czytelny, bo każda sekcja (zdjęcie, cena, tytuł, lokalizacja, parametry) jest jasno wyodrębniona komentarzami i ma jedną odpowiedzialność.
-
-Najważniejsza zaleta: **unika powtórzeń przez wyniesienie do komponentu**. Zamiast kopiować kod karty na liście, mapie i dashboardzie, wystarczy wywołać `<x-property-card :property="$property"/>`. Gdyby trzeba było zmienić wygląd karty (np. dodać badge „Nowe"), poprawia się jeden plik, a zmiana pojawia się wszędzie. Widok korzysta też z **akcesorów modelu** (`$property->formatted_price`, `$property->coverImage`) zamiast formatować cenę w szablonie — logika prezentacji jest w jednym miejscu. Rozbudowa jest łatwa: dorzucenie nowego pola to jedna linijka w komponencie. Podobnie wydzielone są `review-card` i `star-rating` — projekt konsekwentnie stosuje komponenty Blade.
-
----
-
-## 8. Rozróżnianie użytkowników o różnych uprawnieniach
-
-Poziomy uprawnień są opisane **enumem ról** `UserRole` (`Guest`, `User`, `Admin`) zapisanym w kolumnie `users.role`. Model `User` ma metody pomocnicze `isAdmin()`, `isUser()`, `canWriteReviews()`, `isBlocked()`.
-
-Kontrola działa na trzech warstwach:
-
-1. **Middleware na trasach** — blok `admin` chroni cały panel (`AdminMiddleware` rzuca 403, jeśli rola ≠ Admin); `auth`, `verified`, `not.blocked` pilnują, by zalogowany, zweryfikowany i niezablokowany użytkownik mógł dodawać treści.
-2. **Policy** (`PropertyPolicy`, `ReviewPolicy`) — decydują o pojedynczych obiektach. Mają metodę `before()`, która adminowi przyznaje wszystko z góry:
-
-```php
-public function before(User $user): ?bool {
-    return $user->isAdmin() ? true : null;
-}
-public function delete(User $user, Review $review): bool {
-    return $review->user_id === $user->id && ! $user->isBlocked();
-}
-```
-
-3. **Form Request `authorize()`** — np. blokuje recenzowanie własnego ogłoszenia.
-
-**Konkretny przykład:** użytkownik A napisał recenzję ogłoszenia. Tylko A widzi przy niej przycisk „Usuń" i tylko on może wykonać `DELETE /ogloszenia/{property}/recenzje/{review}` — bo `ReviewPolicy::delete` sprawdza `$review->user_id === $user->id`. Użytkownik B, próbując usunąć cudzą recenzję, dostaje **403**. Wyjątkiem jest administrator: dzięki `before()` zwracającemu `true` może usunąć każdą recenzję. Tej samej akcji A nie może wykonać na recenzji B — i właśnie na tym polega rozróżnienie.
-
----
-
-## 9. Pełny przepływ jednej akcji: dodanie recenzji
-
-Prześledźmy `POST /ogloszenia/{property}/recenzje` — od kliknięcia „Opublikuj recenzję" do zapisu i zwrócenia widoku. Żądanie przechodzi przez warstwy: **widok → routing → middleware → Form Request (walidacja + autoryzacja) → kontroler → model/Eloquent → baza → zdarzenie modelu → przekierowanie do widoku**.
-
-**Etap 1 — przechwycenie danych z formularza** (`resources/views/properties/_review-form-multi.blade.php`). Formularz wysyła POST z tokenem CSRF i polami ocen/treści:
+**Krok 1 — formularz (skąd biorą się dane).** Użytkownik wypełnia pola i klika przycisk. To plik widoku z formularzem:
 
 ```blade
 <form method="POST" action="{{ route('reviews.store', $property) }}" id="review-form">
     @csrf
     <input type="hidden" name="rating_overall" value="{{ old('rating_overall', 0) }}">
     <textarea name="content" ...>{{ old('content') }}</textarea>
-    <button type="submit">🚀 Opublikuj recenzję</button>
+    <button type="submit">Opublikuj recenzję</button>
 </form>
 ```
 
-**Etap 2 — routing + middleware** (`routes/web.php`). Trasa znajduje się w bloku chronionym `auth + verified + not.blocked`, więc niezalogowany lub zablokowany w ogóle tu nie dotrze:
+**Krok 2 — trasa i bramki dostępu (czy w ogóle wolno tu wejść).** Adres jest w grupie chronionej: trzeba być zalogowanym, mieć potwierdzony e-mail i nie być zablokowanym.
 
 ```php
 Route::prefix('ogloszenia/{property}/recenzje')->name('reviews.')->group(function () {
@@ -196,34 +145,31 @@ Route::prefix('ogloszenia/{property}/recenzje')->name('reviews.')->group(functio
 });
 ```
 
-**Etap 3 — autoryzacja i walidacja** (`StoreMultiCriteriaReviewRequest`). Zanim kontroler się uruchomi, sprawdzane są uprawnienia (m.in. zakaz recenzowania własnego ogłoszenia i tylko jedna recenzja na ogłoszenie) oraz reguły pól:
+**Krok 3 — sprawdzenie uprawnień i danych (czy ta osoba może i czy dane są poprawne).** Tu pilnujemy m.in., że nie recenzujesz własnego ogłoszenia i że nie dodajesz drugiej recenzji do tej samej oferty:
 
 ```php
 public function authorize(): bool {
     $user = $this->user(); $property = $this->route('property');
     if (!$user || !$user->canWriteReviews() || $user->isBlocked()) return false;
-    if ($property->isOwnedBy($user)) return false;                          // nie swoje
-    if ($property->reviews()->where('user_id',$user->id)->exists()) return false; // jedna recenzja
+    if ($property->isOwnedBy($user)) return false;                          // nie swoje ogłoszenie
+    if ($property->reviews()->where('user_id',$user->id)->exists()) return false; // tylko jedna recenzja
     return true;
 }
 ```
 
-**Etap 4 — główna logika biznesowa** (`ReviewController::store`). Dane już są zwalidowane; kontroler dolicza brakującą ocenę czystości jako średnią pozostałych, dopisuje ID autora i tworzy rekord przez relację:
+**Krok 4 — główna logika (co system robi z danymi).** Dolicza brakującą ocenę, podpina autora i tworzy recenzję:
 
 ```php
 public function store(StoreMultiCriteriaReviewRequest $request, Property $property): RedirectResponse {
     $validated = $request->validated();
-    $validated['rating_cleanliness'] = (int) round(($validated['rating_overall']
-        + $validated['rating_landlord'] + $validated['rating_noise_level']
-        + $validated['rating_location'] + $validated['rating_value_for_money']) / 5);
     $validated['user_id'] = $request->user()->id;
-    $property->reviews()->create($validated);          // ZAPIS przez relację hasMany
+    $property->reviews()->create($validated);   // tu powstaje nowa recenzja
     return redirect()->route('properties.show', $property)
         ->with('success', 'Twoja recenzja została dodana i oczekuje na moderację.');
 }
 ```
 
-**Etap 5 — zapis do bazy + efekt uboczny w modelu** (`app/Models/Review.php`). `create()` wykonuje `INSERT` do tabeli `reviews`. Po zapisie odpala się zdarzenie `saved`, które automatycznie przelicza średnią ocenę ogłoszenia:
+**Krok 5 — zapis do bazy i automatyczny efekt uboczny.** Po zapisaniu recenzji system sam przelicza średnią ocenę ogłoszenia — użytkownik nic w tej sprawie nie klika:
 
 ```php
 protected static function booted(): void {
@@ -232,59 +178,53 @@ protected static function booted(): void {
 }
 ```
 
-`recalculateRating()` w modelu `Property` liczy średnią z nieukrytych recenzji i zapisuje ją przez `updateQuietly()` (cicho — żeby nie wywołać kolejnego zdarzenia i nie zapętlić się).
-
-**Etap 6 — zwrócenie widoku.** Kontroler przekierowuje na `properties.show`; przeglądarka robi GET, `PropertyController::show` ładuje ogłoszenie z recenzjami, a użytkownik widzi swoją recenzję oraz komunikat flash „oczekuje na moderację".
+**Krok 6 — zwrócenie wyniku.** Na koniec użytkownik zostaje przeniesiony z powrotem na stronę ogłoszenia, widzi tam swoją recenzję i zielony komunikat, że czeka ona na zatwierdzenie przez administratora.
 
 ---
 
-## 10. Przykład powiązania danych
+## 10. Opisz jeden przykład powiązania danych. Wybierz dwa typy danych ze sobą powiązane i wyjaśnij, jak to widać w bazie, kodzie i widoku.
 
-Najczytelniejsze powiązanie: **ogłoszenie (Property) i jego recenzje (Review)** — relacja jeden-do-wielu.
+Najprostszy przykład to **ogłoszenie i jego recenzje**. Jedno ogłoszenie może mieć wiele recenzji — czyli „jeden do wielu", tak jak jeden produkt w sklepie może mieć wiele opinii.
 
-**W bazie danych:** tabela `reviews` ma klucz obcy `property_id` wskazujący na `properties.id`, z regułą `cascadeOnDelete` (usunięcie ogłoszenia kasuje jego recenzje) i indeksem `['property_id','is_hidden']`.
+**W bazie danych:** w tabeli recenzji jest kolumna wskazująca, do którego ogłoszenia należy dana recenzja. Dodatkowo ustawiono, że skasowanie ogłoszenia usuwa też jego recenzje.
 
-**W kodzie:** w modelu `Property` relacja jest zadeklarowana w obie strony:
+**W kodzie:** ogłoszenie „wie", że ma swoje recenzje, a recenzja „wie", do którego ogłoszenia należy. Dzięki temu można łatwo pobrać jedno z drugiego:
 
 ```php
-public function reviews(): HasMany { return $this->hasMany(Review::class); }
-public function visibleReviews(): HasMany {
-    return $this->hasMany(Review::class)->where('is_hidden', false);
-}
+public function reviews(): HasMany { return $this->hasMany(Review::class); }   // ogłoszenie → jego recenzje
+public function property(): BelongsTo { return $this->belongsTo(Property::class); } // recenzja → jej ogłoszenie
 ```
 
-a w `Review` strona odwrotna: `public function property(): BelongsTo { return $this->belongsTo(Property::class); }`. Dzięki temu można pisać `$property->reviews()->create(...)` (tworzenie z automatycznym ustawieniem `property_id`) albo `$review->property` (sięgnięcie do ogłoszenia).
+**W widoku:** na liście ofert przy każdym ogłoszeniu widać liczbę i średnią ocen, a na stronie konkretnego ogłoszenia wyświetla się lista wszystkich jego recenzji. To samo powiązanie widać więc na wszystkich trzech poziomach: w bazie, w kodzie i na ekranie.
 
-**W widoku:** na liście ogłoszeń pokazywana jest liczba i średnia recenzji (`withCount`, `withAvg`), a na stronie szczegółów pętla `@foreach($property->visibleReviews as $review)` renderuje karty recenzji. To samo powiązanie jest więc widoczne na wszystkich trzech poziomach.
-
-(Analogiczne relacje: `User → properties`, `User → reviews`, `Property → images`.)
+(Podobnie powiązani są: użytkownik i jego ogłoszenia, użytkownik i jego recenzje, ogłoszenie i jego zdjęcia.)
 
 ---
 
-## 11. Funkcjonalność niewidoczna w interfejsie
+## 11. Wskaż jedną funkcjonalność, której nie widać od razu w interfejsie, ale która jest ważna. Gdzie się znajduje i dlaczego jest potrzebna?
 
-Dobrym przykładem jest **automatyczne przeliczanie średniej oceny ogłoszenia** opisane w punkcie 9 — `Review::booted()` + `Property::recalculateRating()`. Użytkownik nigdzie nie klika „przelicz ocenę"; dzieje się to samoczynnie po każdym dodaniu, edycji czy usunięciu recenzji. Bez tego pole `avg_rating` szybko stałoby się nieaktualne, a sortowanie i karty ogłoszeń pokazywałyby błędne wartości. Zapis przez `updateQuietly()` chroni przed nieskończoną pętlą zdarzeń.
+Dobrym przykładem jest **automatyczne przeliczanie średniej oceny ogłoszenia**. Nigdzie nie ma przycisku „przelicz ocenę" — dzieje się to samo, w tle, za każdym razem gdy ktoś doda, zmieni albo usunie recenzję. Gdyby tego nie było, oceny pokazywane przy ogłoszeniach szybko przestałyby się zgadzać z rzeczywistością.
 
-Druga taka funkcja to **`AnonymousPseudonymService`** (`app/Services/`): deterministycznie zamienia ID użytkownika na pseudonim typu „Spokojny Bóbr" (CRC32 z ID → indeks w listach przymiotników i zwierząt). Dzięki determinizmowi ten sam autor zawsze ma ten sam pseudonim (czytelnik widzi spójną „osobę"), ale jego tożsamość pozostaje ukryta. To kluczowe dla idei recenzji najmu — ludzie chętniej krytykują wynajmującego, jeśli nie grozi to ujawnieniem nazwiska.
+Druga taka rzecz to **anonimowe pseudonimy**. Gdy ktoś wystawia recenzję anonimowo, system zamienia go na stały pseudonim w stylu „Spokojny Bóbr". Co ważne, ten sam autor zawsze dostaje ten sam pseudonim — czytelnik widzi więc spójną „osobę", ale nie pozna jej nazwiska. To istotne akurat przy opiniach o najmie, bo ludzie chętniej napiszą szczerze (także krytycznie) o właścicielu mieszkania, jeśli nie grozi to ujawnieniem tożsamości.
 
-Trzecia — **`TrackPropertyView`**: middleware zliczający unikalne odsłony ogłoszenia raz na sesję.
-
----
-
-## 12. Dlaczego projekt zasługuje na dobrą ocenę
-
-Projekt jest kompletny i dojrzały technicznie jak na pracę zaliczeniową. Realizuje pełen cykl CRUD dla ogłoszeń i recenzji, z czytelnym, RESTowym routingiem i polskimi, semantycznymi adresami (`/ogloszenia/dodaj`, `/admin/uzytkownicy`). Walidacja jest poprawnie wydzielona do klas Form Request z regułami biznesowymi (jedna recenzja na ogłoszenie, zakaz recenzowania własnego mieszkania) i własnymi komunikatami błędów. Uprawnienia zrobiono wzorcowo na trzech warstwach: middleware, Policy z metodą `before()` dla admina oraz `authorize()` w żądaniach — co daje realne rozdzielenie ról gość/użytkownik/admin. Baza ma przemyślany schemat z kluczami obcymi, indeksami, ograniczeniem `unique`, soft-deletes i kaskadami. Widoczna jest dbałość o jakość: komponenty Blade eliminujące powtórzenia, akcesory i scope'y w modelach, usługi (`Service`) wydzielające logikę pseudonimów i zdjęć, automatyczne przeliczanie ocen przez zdarzenia modelu oraz zabezpieczenie CSRF i obsługa błędów 403/404. Są też testy (`tests/Feature`) i seedery zasilające aplikację realistycznymi danymi. Słabsze punkty (zdublowana akcja `verify`, licznik „pomocne" oparty tylko na sesji) są drobne i lokalne. Całość pokazuje rozumienie architektury Laravela, a nie tylko jej odtworzenie.
+Jest też cichy licznik odsłon ogłoszeń, który zlicza unikalne wejścia raz na sesję.
 
 ---
 
-## 13. Co poprawić w pierwszej kolejności
+## 12. Napisz 6–10 zdań, dlaczego projekt zasługuje na wskazaną ocenę. Odwołaj się do konkretnych przykładów.
 
-**Uporządkować weryfikację recenzji do jednej, administracyjnej ścieżki** (opisanej w punkcie 5): usunąć metodę `verify` i trasę z poziomu zwykłego użytkownika, zostawiając wyłącznie `admin.reviews.verify` chronioną przez `auth + admin`.
+Projekt jest kompletny i przemyślany jak na pracę zaliczeniową. Pozwala wykonać pełen zestaw działań — dodawanie, przeglądanie, edycję i usuwanie ogłoszeń oraz recenzji — a adresy stron są czytelne i po polsku (np. `/ogloszenia/dodaj`). Sprawdzanie poprawności danych jest porządnie wydzielone i zawiera sensowne reguły, takie jak zakaz recenzowania własnego mieszkania czy limit jednej recenzji na ofertę. Uprawnienia zrobiono solidnie i na kilku poziomach, dzięki czemu role gościa, użytkownika i administratora są naprawdę od siebie oddzielone. Baza danych ma sensowną strukturę z powiązaniami między tabelami i zabezpieczeniami przed bałaganem w danych. Widać też dbałość o jakość: powtarzające się elementy wyglądu zrobiono jako gotowe „klocki", a część logiki (np. pseudonimy, przeliczanie ocen) działa automatycznie w tle. Aplikacja jest też zabezpieczona przed typowymi atakami na formularze i sensownie reaguje na błędy oraz brak uprawnień. Do tego dochodzą testy i gotowe dane startowe. Słabsze punkty, jak zdublowana funkcja zatwierdzania recenzji, są drobne i łatwe do naprawienia. Całość pokazuje, że autor rozumie, jak taka aplikacja działa od środka, a nie tylko skopiował gotowy schemat.
 
-Dlaczego to najważniejsze: weryfikacja recenzji to operacja zaufania — to ona decyduje, którym opiniom portal nadaje status „zweryfikowana". Trzymanie jej akcji częściowo w przestrzeni zwykłego użytkownika (chronionej dopiero wewnętrznym `authorize`) rozmywa granicę uprawnień i jest najbardziej wrażliwym punktem z perspektywy bezpieczeństwa i wiarygodności danych. Skonsolidowanie tej logiki usuwa duplikację, zmniejsza ryzyko regresji przy zmianach i czyni model uprawnień w pełni spójnym — a właśnie spójność uprawnień jest tu kryterium o największej wadze.
+---
+
+## 13. Co należy poprawić w pierwszej kolejności, aby projekt zasługiwał na wyższą ocenę? Podaj jedną konkretną zmianę i wyjaśnij, dlaczego jest najważniejsza.
+
+Najpierw uporządkowałbym **zatwierdzanie recenzji do jednej drogi — wyłącznie po stronie administratora** (opisane w punkcie 5): usunąć tę zdublowaną, „użytkownikową" wersję i zostawić jedną, zamkniętą dla zwykłych użytkowników.
+
+Dlaczego akurat to? Bo zatwierdzanie recenzji to czynność, która decyduje o wiarygodności całego serwisu — to ona nadaje opiniom status „sprawdzonej". Trzymanie jej częściowo poza panelem administratora rozmywa granicę między tym, co wolno użytkownikowi, a co administratorowi, i jest najbardziej wrażliwym miejscem z punktu widzenia bezpieczeństwa. Poprawienie tego usuwa powielony kod, zmniejsza ryzyko pomyłek przy późniejszych zmianach i sprawia, że zasady dostępu stają się w pełni spójne — a to tutaj najważniejsze.
 
 ---
 
 ## Uwaga końcowa
 
-Pytanie o **porównanie do innego projektu z grupy** (mocniejszy / słabszy) pominięto — w dostarczonym archiwum znajduje się tylko ten jeden projekt, więc brak danych do rzetelnego zestawienia z pracami innych osób.
+Pytanie o porównanie z innym projektem z grupy (mocniejszy / słabszy) pominięto, ponieważ w dostarczonym archiwum znajduje się tylko ten jeden projekt — nie ma więc z czym go rzetelnie zestawić.
