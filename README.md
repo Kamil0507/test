@@ -66,70 +66,7 @@ Interfejs zaprojektowano modułowo, co ułatwia nawigację i przyspiesza obsług
 ## Baza danych
 
 ### Diagram ERD
-```mermaid
-erDiagram
-    USERS ||--o{ REPORTS  : "tworzy (autor)"
-    USERS ||--o{ REPORTS  : "obsługuje (serwisant)"
-    USERS ||--o{ COMMENTS : "pisze"
-    REPORTS ||--o{ COMMENTS : "ma"
-    BUILDINGS ||--o{ LOCATIONS : "zawiera"
-    LOCATIONS ||--o{ REPORTS : "dotyczy"
-
-    USERS {
-        int id PK
-        string imie_nazwisko
-        string email "unikalny"
-        string password_hash
-        string rola "student/serwisant/administrator"
-        datetime data_utworzenia
-    }
-    REPORTS {
-        int id PK
-        string tytul
-        text opis
-        string kategoria
-        string priorytet
-        string status
-        string budynek
-        string pomieszczenie
-        int location_id FK
-        int autor_id FK
-        int serwisant_id FK
-        datetime data_utworzenia
-        datetime data_aktualizacji
-    }
-    COMMENTS {
-        int id PK
-        text tresc
-        int report_id FK
-        int autor_id FK
-        datetime data_utworzenia
-    }
-    BUILDINGS {
-        int id PK
-        string kod
-        string nazwa
-        string kampus
-        string adres
-        float latitude
-        float longitude
-        bool aktywny
-    }
-    LOCATIONS {
-        int id PK
-        int building_id FK
-        string budynek
-        int pietro
-        string numer
-        string nazwa
-        string typ
-        bool czy_wspolna
-        int svg_x
-        int svg_y
-        int svg_w
-        int svg_h
-    }
-```
+![Diagram ERD bazy danych](docs/erd.png)
 
 ### Opis bazy danych
 Baza to plik **SQLite** (`instance/usterki.db`), obsługiwany przez ORM
@@ -201,13 +138,6 @@ python run.py
 ```
 
 Następnie otwórz w przeglądarce: **http://127.0.0.1:8000**
-
-> Uwaga: na Windows port 5000 bywa zablokowany (Hyper-V/WSL → błąd WinError 10013),
-> dlatego aplikacja domyślnie startuje na porcie **8000**. Inny port ustawisz tak:
-> `$env:PORT = "5500"; python run.py`
-
-**Reset bazy danych:** aby zacząć od zera, usuń plik `instance/usterki.db`
-i uruchom aplikację ponownie (dane przykładowe utworzą się na nowo).
 
 ---
 
