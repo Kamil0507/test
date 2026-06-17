@@ -1,434 +1,231 @@
-# RentOpinion — konkretne odpowiedzi na pytania (z fragmentami kodu)
+# Dokumentacja projektu: System zgłaszania usterek na uniwersytecie
 
-Projekt: aplikacja Laravel (PHP), baza SQLite, widoki Blade, logowanie na Laravel Breeze. Portal z recenzjami wynajmowanych mieszkań.
-
----
-
-## 1. Struktura bazy danych, przykładowa tabela i dane początkowe
-
-Bazę zbudowano za pomocą **migracji** w katalogu `database/migrations/`. Główne tabele: `users`, `properties`, `property_images`, `reviews`.
-
-Przykładowa tabela — **`reviews`** (`database/migrations/2024_01_01_000004_create_reviews_table.php`):
-
-```php
-Schema::create('reviews', function (Blueprint $table) {
-    $table->id();
-    $table->foreignId('property_id')->constrained()->cascadeOnDelete();
-    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-
-    $table->unsignedTinyInteger('rating_overall');          // oceny 1–5
-    $table->unsignedTinyInteger('rating_location');
-    $table->unsignedTinyInteger('rating_landlord');
-    // ...
-    $table->string('title', 200);
-    $table->text('content');
-
-    $table->boolean('is_verified')->default(false);          // moderacja
-    $table->boolean('is_hidden')->default(false);
-    $table->foreignId('verified_by')->nullable()->constrained('users')->nullOnDelete();
-
-    $table->timestamps();
-    $table->softDeletes();
-
-    $table->unique(['property_id', 'user_id']);              // jedna recenzja na ogłoszenie
-    $table->index(['property_id', 'is_hidden']);
-});
-```
-
-Najważniejsze pola: `property_id` i `user_id` (do kogo/czego należy recenzja), oceny `rating_*` (1–5), `title` i `content` (treść), `is_verified`/`is_hidden` (moderacja). Kluczowe reguły: `unique(['property_id','user_id'])` — jeden użytkownik = jedna recenzja na ogłoszenie; `cascadeOnDelete` — recenzje znikają wraz z ogłoszeniem; `softDeletes()` — usunięcie tylko oznacza rekord, nie kasuje go fizycznie.
-
-Dane początkowe pochodzą z **seederów** (`database/seeders/`). Np. konto admina (`AdminSeeder.php`):
-
-```php
-User::updateOrCreate(
-    ['email' => 'admin@rentopinion.pl'],
-    [
-        'name'     => 'Administrator',
-        'password' => Hash::make(env('ADMIN_PASSWORD', 'Admin1234!')),
-        'role'     => UserRole::Admin,
-        'email_verified_at' => now(),
-    ]
-);
-```
-
-`PropertySeeder` wpisuje gotowe ogłoszenia z polskich miast, a fabryki (`database/factories/ReviewFactory.php`) generują losowe dane testowe (`'rating_overall' => fake()->numberBetween(1, 5)`).
+## Zespół projektowy
+- **Kamil Antoni Krawczyk**
+- **Patryk Kacper Długosz**
 
 ---
 
-## 2. Zabezpieczenie formularzy przed wysłaniem z zewnątrz (CSRF)
-
-Mechanizm to **token CSRF**. Każdy formularz zmieniający dane ma dyrektywę `@csrf`. Przykład — formularz recenzji (`resources/views/properties/_review-form-multi.blade.php`):
-
-```blade
-<form method="POST" action="{{ route('reviews.store', $property) }}" id="review-form">
-    @csrf
-    ...
-</form>
-```
-
-`@csrf` dokłada do formularza ukryte pole z tokenem zapisanym w sesji. Wbudowany middleware `VerifyCsrfToken` przy każdym żądaniu POST/PATCH/DELETE porównuje token z formularza z tokenem sesji. Jeśli się nie zgadza (żądanie z obcej strony) — Laravel zwraca błąd **419** i dane nie zostają zapisane. Token zna tylko prawdziwa strona aplikacji, więc obca witryna nie podszyje się pod zalogowanego użytkownika.
+## Opis projektu
+Aplikacja webowa stworzona w języku **Python (Flask)**, która służy do cyfryzacji
+procesu zgłaszania awarii na terenie kampusu Uniwersytetu Rzeszowskiego. System
+pozwala odejść od papierowych formularzy na rzecz szybkiej, śledzonej komunikacji
+między społecznością akademicką a działem technicznym. Lokalizację usterki wybiera
+się wizualnie — na mapie kampusu (markery budynków z GPS) oraz na interaktywnym
+planie piętra, na którym sale zmieniają kolor zależnie od statusu zgłoszeń.
 
 ---
 
-## 3. Reakcja na sytuacje nietypowe — co widzi użytkownik i co dzieje się w kodzie
+## Zakres projektu i opis funkcjonalności
+Głównym celem aplikacji jest pełna cyfryzacja procesu zgłaszania oraz obsługi
+usterek technicznych na terenie kampusu. System zapewnia efektywny przepływ
+informacji między zgłaszającymi a serwisem.
 
-**Nieistniejące / zablokowane ogłoszenie** → strona 404. Kod (`PropertyController::show`):
-
-```php
-public function show(Property $property): View
-{
-    abort_if($property->isBlocked(), 404);   // zablokowane „udaje" nieistniejące
-    // ...
-}
-```
-
-Gdy podany numer ogłoszenia nie istnieje, mechanizm route model binding sam zwraca 404.
-
-**Brak uprawnień do panelu admina** → strona 403. Kod (`AdminMiddleware.php`):
-
-```php
-if (! $request->user() || $request->user()->role !== UserRole::Admin) {
-    abort(403, 'Brak dostępu do panelu administracyjnego.');
-}
-```
-
-**Konto zablokowane** → wylogowanie i komunikat. Kod (`EnsureUserNotBlocked.php`):
-
-```php
-if (Auth::check() && Auth::user()->isBlocked()) {
-    Auth::logout();
-    $request->session()->invalidate();
-    return redirect()->route('login')
-        ->withErrors(['email' => 'Twoje konto zostało zablokowane. Skontaktuj się z administratorem.']);
-}
-```
-
-**Pusta lista** → komunikat zamiast pustej strony. Kod (`resources/views/admin/reviews/index.blade.php`):
-
-```blade
-@forelse($reviews as $review)
-    {{-- wiersz recenzji --}}
-@empty
-    {{-- komunikat: brak wyników --}}
-@endforelse
-```
-
-Użytkownik widzi więc albo stronę błędu (403/404/419), albo komunikat na ekranie.
+- **System autoryzacji i ról:** rejestracja i logowanie z hasłami przechowywanymi
+  jako bezpieczny hash. Trzy poziomy uprawnień:
+  - `student` – zgłaszający (student/pracownik): tworzy zgłoszenia i widzi wyłącznie własne,
+  - `serwisant` – technik: widzi wszystkie zgłoszenia, zmienia statusy, przyjmuje je do realizacji,
+  - `administrator` – pełne uprawnienia: zarządzanie użytkownikami, budynkami i usuwanie zgłoszeń.
+- **Moduł zgłoszeniowy:** formularz z walidacją pól pozwalający precyzyjnie określić
+  lokalizację (budynek → piętro → sala wybierane z mapy/list), kategorię usterki
+  (IT / Komputery, Elektryka, Hydraulika, Meble, Ogrzewanie / Klimatyzacja,
+  Budynek / Konstrukcja, Inne) oraz dodać tytuł i opis problemu.
+- **Zarządzanie statusem zgłoszenia:** śledzenie postępu prac. Każde zgłoszenie może
+  przyjmować statusy: **Nowe → W trakcie → Wstrzymane** (oczekiwanie na części) →
+  **Rozwiązane** lub **Odrzucone**. Serwisant może też przypisać do zgłoszenia konkretnego technika.
+- **Priorytetyzacja zadań:** określenie pilności zgłoszenia (Niski, Średni, Wysoki,
+  Krytyczny), co pozwala na szybszą reakcję przy awariach krytycznych. Priorytet
+  wpływa też na kolor sali na planie piętra.
+- **Komentarze:** wątek komentarzy pod każdym zgłoszeniem (komunikacja zgłaszający ↔ serwisant).
+- **Mapa kampusu i plan piętra:** budynki UR jako markery z GPS (Leaflet + OpenStreetMap)
+  oraz interaktywny plan piętra generowany z bazy danych, z możliwością przełączania
+  budynku i piętra.
+- **Baza danych i archiwizacja:** przechowywanie pełnej historii zgłoszeń, dat
+  utworzenia i aktualizacji, co umożliwia analizę najczęstszych awarii.
 
 ---
 
-## 4. Jak aplikacja rozpoznaje intencję użytkownika (adres, rodzaj żądania, ścieżka, kod)
+## Panele / zakładki aplikacji
+Interfejs zaprojektowano modułowo, co ułatwia nawigację i przyspiesza obsługę:
 
-Po **rodzaju żądania HTTP + adresie**. Trasy są w `routes/web.php`:
-
-```php
-Route::prefix('ogloszenia')->name('properties.')->group(function () {
-    Route::get('/',           [PropertyController::class, 'index']);   // GET  /ogloszenia        → lista
-    Route::post('/',          [PropertyController::class, 'store']);   // POST /ogloszenia        → utwórz
-    Route::get('/{property}', [PropertyController::class, 'show']);    // GET  /ogloszenia/{id}   → pokaż
-
-    Route::middleware(['auth', 'verified', 'not.blocked'])->group(function () {
-        Route::get('/{property}/edytuj', [PropertyController::class, 'edit']);    // formularz edycji
-        Route::patch('/{property}',      [PropertyController::class, 'update']);  // PATCH  → aktualizuj
-        Route::delete('/{property}',     [PropertyController::class, 'destroy']); // DELETE → usuń
-    });
-});
-```
-
-Ten sam adres `/ogloszenia/{id}` znaczy „pokaż" (GET), „aktualizuj" (PATCH) lub „usuń" (DELETE) — zależnie od metody. W formularzu HTML PATCH/DELETE realizuje się ukrytym polem `@method('PATCH')` / `@method('DELETE')`. Każda kombinacja wskazuje konkretną metodę kontrolera, np. `store` przy POST.
+- **Panel logowania:** ekran autoryzacji użytkownika; z odnośnikiem do rejestracji.
+- **Pulpit (Dashboard):** ekran powitalny ze statystykami zgłoszeń wg statusu oraz
+  listą ostatnich zgłoszeń (student widzi własne, serwisant/administrator – wszystkie).
+- **Mapa:** interaktywny plan piętra z salami kolorowanymi wg statusu usterek;
+  listy wyboru budynku i piętra; kliknięcie sali pokazuje jej zgłoszenia.
+- **Nowe zgłoszenie:** formularz z mapą kampusu i kaskadą budynek → sala oraz walidacją pól.
+- **Zgłoszenia (Historia):** lista zgłoszeń z filtrowaniem po statusie, kategorii
+  i priorytecie; przejście do szczegółów, komentarzy i (dla serwisu) edycji statusu.
+- **Panel administratora / serwisanta:**
+  - **Budynki** – zarządzanie markerami na mapie (dodawanie budynku przez kliknięcie na mapie, ukrywanie/pokazywanie),
+  - **Użytkownicy** – pełna edycja profili (imię, e-mail, rola, reset hasła).
+- **Moje konto:** edycja własnych danych (imię i nazwisko, e-mail, zmiana hasła).
 
 ---
 
-## 5. Miejsce do poprawy technicznej
+## Baza danych
 
-**Problem:** zatwierdzanie recenzji (`verify`) jest zaimplementowane dwukrotnie. Raz w `ReviewController` (trasa dostępna dla zwykłego użytkownika, chroniona dopiero w środku przez `authorize`):
+### Diagram ERD
+```mermaid
+erDiagram
+    USERS ||--o{ REPORTS  : "tworzy (autor)"
+    USERS ||--o{ REPORTS  : "obsługuje (serwisant)"
+    USERS ||--o{ COMMENTS : "pisze"
+    REPORTS ||--o{ COMMENTS : "ma"
+    BUILDINGS ||--o{ LOCATIONS : "zawiera"
+    LOCATIONS ||--o{ REPORTS : "dotyczy"
 
-```php
-// app/Http/Controllers/ReviewController.php
-public function verify(Review $review): RedirectResponse
-{
-    $this->authorize('verify', $review);
-    $review->update(['is_verified' => true, 'verified_by' => auth()->id(), 'verified_at' => now()]);
-    return back()->with('success', 'Recenzja została zweryfikowana.');
-}
+    USERS {
+        int id PK
+        string imie_nazwisko
+        string email "unikalny"
+        string password_hash
+        string rola "student/serwisant/administrator"
+        datetime data_utworzenia
+    }
+    REPORTS {
+        int id PK
+        string tytul
+        text opis
+        string kategoria
+        string priorytet
+        string status
+        string budynek
+        string pomieszczenie
+        int location_id FK
+        int autor_id FK
+        int serwisant_id FK
+        datetime data_utworzenia
+        datetime data_aktualizacji
+    }
+    COMMENTS {
+        int id PK
+        text tresc
+        int report_id FK
+        int autor_id FK
+        datetime data_utworzenia
+    }
+    BUILDINGS {
+        int id PK
+        string kod
+        string nazwa
+        string kampus
+        string adres
+        float latitude
+        float longitude
+        bool aktywny
+    }
+    LOCATIONS {
+        int id PK
+        int building_id FK
+        string budynek
+        int pietro
+        string numer
+        string nazwa
+        string typ
+        bool czy_wspolna
+        int svg_x
+        int svg_y
+        int svg_w
+        int svg_h
+    }
 ```
 
-a drugi raz w panelu admina, robiąc niemal to samo:
+### Opis bazy danych
+Baza to plik **SQLite** (`instance/usterki.db`), obsługiwany przez ORM
+**SQLAlchemy**. Tworzy się automatycznie przy pierwszym uruchomieniu i — gdy jest
+pusta — wypełnia danymi przykładowymi (`app/seed.py`). Tabele:
 
-```php
-// app/Http/Controllers/Admin/ReviewModerationController.php
-public function verify(Review $review): RedirectResponse
-{
-    $review->update(['is_verified' => true, 'verified_by' => auth()->id(), 'verified_at' => now()]);
-    return back()->with('success', 'Recenzja została zweryfikowana.');
-}
-```
-
-**Wpływ:** zdublowany kod łatwo się rozjeżdża przy zmianach, a czynność czysto administracyjna jest częściowo dostępna spoza panelu admina — rozmywa to granicę uprawnień.
-
-**Poprawa:** usunąć metodę i trasę `verify` z poziomu użytkownika, zostawić jedną — `admin.reviews.verify` (chronioną przez `auth + admin`), i na nią kierować przycisk w widoku.
+- **users** – konta użytkowników wraz z rolą i hasłem (hash). Jeden użytkownik może
+  być autorem wielu zgłoszeń oraz serwisantem przypisanym do wielu zgłoszeń.
+- **reports** – zgłoszenia usterek; powiązane z autorem, opcjonalnym serwisantem oraz
+  lokalizacją (salą). Przechowują kategorię, priorytet, status i daty.
+- **comments** – komentarze pod zgłoszeniami; powiązane ze zgłoszeniem i autorem
+  (usuwane kaskadowo wraz ze zgłoszeniem).
+- **buildings** – budynki kampusu (markery na mapie) ze współrzędnymi GPS.
+- **locations** – pomieszczenia (sale) w budynkach, z geometrią planu piętra (SVG);
+  każdy budynek ma własny zestaw 50 sal w podziale na piętra.
 
 ---
 
-## 6. Walidacja danych wpisanych przez użytkownika
+## Wykorzystane biblioteki
+- **Flask 3.0.3** – framework webowy (routing, szablony, obsługa żądań).
+- **Flask-SQLAlchemy 3.1.1** – integracja ORM SQLAlchemy z Flask (modele, baza).
+- **Flask-Login 0.6.3** – uwierzytelnianie, sesje i ochrona widoków (`login_required`).
+- **Werkzeug** – bezpieczne haszowanie haseł (`generate/check_password_hash`).
+- **Jinja2** – silnik szablonów HTML.
+- **SQLite** – wbudowana, plikowa baza danych (bez osobnego serwera).
+- **Leaflet 1.9.4 + OpenStreetMap** (frontend, z CDN) – mapa kampusu z markerami budynków.
+- **HTML / CSS / JavaScript** – warstwa interfejsu (własny arkusz `style.css`).
 
-Walidacja siedzi w klasach Form Request (`app/Http/Requests/`) i uruchamia się automatycznie przed kodem kontrolera. Przykład — `StoreMultiCriteriaReviewRequest`:
-
-```php
-public function rules(): array
-{
-    return [
-        'title'             => ['required', 'string', 'min:5', 'max:200'],
-        'content'           => ['required', 'string', 'min:150', 'max:5000'],
-        'rating_overall'    => ['required', 'integer', 'between:1,5'],
-        'rating_landlord'   => ['required', 'integer', 'between:1,5'],
-        'tenancy_end'       => ['nullable', 'date', 'before_or_equal:today', 'after_or_equal:tenancy_start'],
-        // ...
-    ];
-}
-
-public function messages(): array
-{
-    return [
-        'content.min'            => 'Treść recenzji musi mieć co najmniej 150 znaków.',
-        'rating_overall.between' => 'Ocena musi być w skali 1–5.',
-    ];
-}
-```
-
-Sprawdzane są m.in.: obecność i długość tytułu/treści (treść min. 150 znaków), zakres ocen 1–5, logika dat najmu. W ogłoszeniu dodatkowo kod pocztowy (`'postal_code' => ['required', 'regex:/^\d{2}-\d{3}$/']`) i pliki (`'image', 'mimes:jpeg,jpg,png,webp', 'max:5120'`).
-
-Wykrywalne błędy: brak pola, za krótka treść, ocena spoza zakresu, zły kod pocztowy, zły plik. Gdy dane są błędne, użytkownik wraca do formularza z zachowanymi wartościami (`old(...)`), a błędy pokazują się zbiorczo i przy polach:
-
-```blade
-@if($errors->any())
-    <ul>@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul>
-@endif
-
-<input name="title" value="{{ old('title') }}" class="{{ $errors->has('title') ? 'error' : '' }}">
-@error('title') <span class="form-error">{{ $message }}</span> @enderror
-```
+> Projekt korzysta wyłącznie z bibliotek wymienionych w `requirements.txt`
+> (pozostałe zależności instalują się automatycznie jako zależności pośrednie).
 
 ---
 
-## 7. Dobrze zorganizowany widok
+## Dane potrzebne do konfiguracji podczas pierwszego uruchomienia
+Aplikacja **nie wymaga ręcznej konfiguracji** – baza danych i dane przykładowe
+tworzą się automatycznie. Opcjonalnie można nadpisać ustawienia zmiennymi środowiskowymi:
 
-Przykład — komponent karty ogłoszenia (`resources/views/components/property-card.blade.php`):
+| Zmienna | Znaczenie | Domyślnie |
+|---|---|---|
+| `SECRET_KEY` | klucz do podpisywania sesji/ciasteczek | wartość wbudowana |
+| `DATABASE_URL` | adres bazy danych | lokalny SQLite `instance/usterki.db` |
+| `PORT` | port serwera | `8000` |
 
-```blade
-<div class="property-card">
-    <a href="{{ route('properties.show', $property) }}">
-        @if($property->coverImage)
-            <img src="{{ $property->coverImage->url }}" alt="{{ $property->title }}" loading="lazy">
-        @else
-            <div class="property-card-img-placeholder"><i class="fa-solid fa-house"></i></div>
-        @endif
-    </a>
-    <div class="property-card-body">
-        <div class="property-card-price">{{ $property->formatted_price }}<span>/mies.</span></div>
-        <div class="property-card-title">{{ Str::limit($property->title, 55) }}</div>
-        <div class="property-card-location">{{ $property->city }}</div>
-    </div>
-</div>
-```
+**Konta demonstracyjne** (tworzone automatycznie przy pierwszym uruchomieniu):
 
-Jest czytelny, bo każda sekcja (zdjęcie, cena, tytuł, lokalizacja) jest osobna i podpisana. **Nie powtarza kodu** — zamiast kopiować kartę na liście, mapie i stronie głównej, wstawia się ją jednym wywołaniem `<x-property-card :property="$property"/>`. Zmiana wyglądu = poprawka w jednym pliku, widoczna wszędzie. Korzysta z gotowych akcesorów (`$property->formatted_price`, `$property->coverImage`), więc formatowanie jest w jednym miejscu. Rozbudowa to dosłownie jedna linijka.
+| Rola | E-mail | Hasło |
+|------|--------|-------|
+| Administrator | `admin@ur.edu.pl` | `admin123` |
+| Serwisant | `serwis@ur.edu.pl` | `serwis123` |
+| Student | `student@ur.edu.pl` | `student123` |
 
 ---
 
-## 8. Rozróżnianie uprawnień + przykład
+## Instrukcja uruchomienia aplikacji
+Wymagany **Python 3.13**. W terminalu (PowerShell), w katalogu projektu:
 
-Role są w enumie `UserRole` (`Guest`, `User`, `Admin`) w kolumnie `users.role`. Kontrola działa na trzech poziomach.
+```powershell
+# 1. Utwórz wirtualne środowisko
+python -m venv .venv
 
-Middleware na trasie (cały panel admina):
+# 2. Aktywuj je
+.\.venv\Scripts\Activate.ps1
 
-```php
-// routes/web.php
-Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () { ... });
+# 3. Zainstaluj zależności
+pip install -r requirements.txt
+
+# 4. Uruchom aplikację
+python run.py
 ```
 
-Policy decydująca o pojedynczym obiekcie (`app/Policies/ReviewPolicy.php`):
+Następnie otwórz w przeglądarce: **http://127.0.0.1:8000**
 
-```php
-public function before(User $user): ?bool
-{
-    return $user->isAdmin() ? true : null;     // admin może wszystko
-}
+> Uwaga: na Windows port 5000 bywa zablokowany (Hyper-V/WSL → błąd WinError 10013),
+> dlatego aplikacja domyślnie startuje na porcie **8000**. Inny port ustawisz tak:
+> `$env:PORT = "5500"; python run.py`
 
-public function delete(User $user, Review $review): bool
-{
-    return $review->user_id === $user->id && ! $user->isBlocked();  // autor może usunąć tylko swoją
-}
-```
-
-W kontrolerze sprawdzenie wywoływane jest tak:
-
-```php
-public function destroy(Review $review): RedirectResponse
-{
-    $this->authorize('delete', $review);   // tu Policy decyduje
-    $review->delete();
-    return back()->with('success', 'Recenzja została usunięta.');
-}
-```
-
-**Przykład:** użytkownik A może usunąć własną recenzję (warunek `$review->user_id === $user->id` spełniony). Użytkownik B przy próbie usunięcia recenzji A dostaje **403**. Administrator może usunąć każdą recenzję — bo `before()` zwraca dla niego `true`. Ta sama akcja jest więc dozwolona dla autora i admina, a zabroniona dla obcego użytkownika.
+**Reset bazy danych:** aby zacząć od zera, usuń plik `instance/usterki.db`
+i uruchom aplikację ponownie (dane przykładowe utworzą się na nowo).
 
 ---
 
-## 9. Pełna droga jednej akcji: dodanie recenzji (warstwy + 6 fragmentów kodu)
-
-Łańcuch: **formularz → trasa/middleware → walidacja + autoryzacja → kontroler → zapis do bazy + zdarzenie modelu → przekierowanie do widoku.**
-
-**1) Formularz — przechwycenie danych** (`resources/views/properties/_review-form-multi.blade.php`):
-
-```blade
-<form method="POST" action="{{ route('reviews.store', $property) }}" id="review-form">
-    @csrf
-    <input type="hidden" name="rating_overall" value="{{ old('rating_overall', 0) }}">
-    <textarea name="content">{{ old('content') }}</textarea>
-    <button type="submit">Opublikuj recenzję</button>
-</form>
+## Struktura projektu
 ```
-
-**2) Trasa + bramki dostępu** (`routes/web.php`) — wymaga zalogowania, weryfikacji e-mail i braku blokady:
-
-```php
-Route::middleware(['auth', 'verified', 'not.blocked'])->group(function () {
-    Route::prefix('ogloszenia/{property}/recenzje')->name('reviews.')->group(function () {
-        Route::post('/', [ReviewController::class, 'store'])->name('store');
-    });
-});
+Projekt PYTHON/
+├── run.py                  # punkt wejścia (uruchomienie serwera)
+├── config.py               # konfiguracja (klucz, baza danych)
+├── requirements.txt        # zależności
+├── README.md               # dokumentacja
+└── app/
+    ├── __init__.py         # fabryka aplikacji, rozszerzenia
+    ├── models.py           # modele bazy: User, Report, Comment, Building, Location
+    ├── auth.py             # logowanie, rejestracja, edycja konta
+    ├── main.py             # zgłoszenia, mapa, panel administratora
+    ├── seed.py             # dane przykładowe (budynki, sale)
+    ├── static/
+    │   ├── style.css       # arkusz stylów
+    │   └── img/ur-logo.png # logo Uniwersytetu Rzeszowskiego
+    └── templates/          # szablony HTML (Jinja2)
 ```
-
-**3) Walidacja i autoryzacja** (`app/Http/Requests/StoreMultiCriteriaReviewRequest.php`):
-
-```php
-public function authorize(): bool
-{
-    $user = $this->user(); $property = $this->route('property');
-    if (!$user || !$user->canWriteReviews() || $user->isBlocked()) return false;
-    if ($property->isOwnedBy($user)) return false;                                  // nie własne ogłoszenie
-    if ($property->reviews()->where('user_id', $user->id)->exists()) return false;  // tylko jedna recenzja
-    return true;
-}
-```
-
-**4) Główna logika** (`app/Http/Controllers/ReviewController.php`):
-
-```php
-public function store(StoreMultiCriteriaReviewRequest $request, Property $property): RedirectResponse
-{
-    $validated = $request->validated();
-    $validated['rating_cleanliness'] = (int) round(
-        ($validated['rating_overall'] + $validated['rating_landlord'] + $validated['rating_noise_level']
-        + $validated['rating_location'] + $validated['rating_value_for_money']) / 5
-    );
-    $validated['user_id'] = $request->user()->id;
-    $property->reviews()->create($validated);          // ZAPIS do bazy przez relację
-    return redirect()->route('properties.show', $property)
-        ->with('success', 'Twoja recenzja została dodana i oczekuje na moderację.');
-}
-```
-
-**5) Zapis do bazy + automatyczny efekt uboczny** (`app/Models/Review.php`) — po zapisie przelicza się średnia ocena ogłoszenia:
-
-```php
-protected static function booted(): void
-{
-    static::saved(fn (Review $review) => $review->property?->recalculateRating());
-    static::deleted(fn (Review $review) => $review->property?->recalculateRating());
-}
-```
-
-oraz w `app/Models/Property.php`:
-
-```php
-public function recalculateRating(): void
-{
-    $avg = $this->visibleReviews()->avg('rating_overall');
-    $this->updateQuietly(['avg_rating' => $avg ? round($avg, 2) : null]);
-}
-```
-
-**6) Zwrócenie widoku** — przekierowanie na `properties.show`; `PropertyController::show` ładuje ogłoszenie z recenzjami, użytkownik widzi swoją recenzję i komunikat o oczekiwaniu na moderację.
-
----
-
-## 10. Powiązanie danych: ogłoszenie ↔ recenzje (relacja jeden-do-wielu)
-
-**W bazie** (`create_reviews_table.php`) — klucz obcy plus kaskada:
-
-```php
-$table->foreignId('property_id')->constrained()->cascadeOnDelete();
-```
-
-**W kodzie** — obie strony relacji:
-
-```php
-// app/Models/Property.php
-public function reviews(): HasMany { return $this->hasMany(Review::class); }
-public function visibleReviews(): HasMany { return $this->hasMany(Review::class)->where('is_hidden', false); }
-
-// app/Models/Review.php
-public function property(): BelongsTo { return $this->belongsTo(Property::class); }
-```
-
-**W widoku** — na liście pobieramy liczbę i średnią recenzji jednym zapytaniem (`PropertyController::index`):
-
-```php
-Property::query()->withAvg('visibleReviews as avg_overall', 'rating_overall')
-                 ->withCount('visibleReviews as reviews_count');
-```
-
-a na stronie ogłoszenia wyświetlamy listę:
-
-```blade
-@foreach($property->visibleReviews as $review)
-    <x-review-card :review="$review"/>
-@endforeach
-```
-
-To samo powiązanie widać więc w bazie, w kodzie i na ekranie.
-
----
-
-## 11. Funkcjonalność niewidoczna w interfejsie
-
-**Automatyczne przeliczanie średniej oceny** (kod w punkcie 9: `Review::booted()` + `Property::recalculateRating()`). Nigdzie nie ma przycisku „przelicz" — dzieje się to samo po każdej zmianie recenzji. Bez tego oceny przy ogłoszeniach byłyby nieaktualne. `updateQuietly()` zapobiega zapętleniu zdarzeń.
-
-**Anonimowe pseudonimy** (`app/Services/AnonymousPseudonymService.php`):
-
-```php
-public function forUser(int $userId): string
-{
-    $hash = abs(crc32("anon_{$userId}"));
-    $adjIndex    = $hash % count(self::ADJECTIVES);
-    $animalIndex = intdiv($hash, count(self::ADJECTIVES)) % count(self::ANIMALS);
-    return self::ADJECTIVES[$adjIndex] . ' ' . self::ANIMALS[$animalIndex];
-}
-```
-
-Zamienia ID użytkownika na stały pseudonim („Spokojny Bóbr"). Ten sam autor zawsze ma ten sam pseudonim, ale jego tożsamość pozostaje ukryta — istotne przy recenzjach najmu.
-
-Trzecia rzecz — `TrackPropertyView` zliczający odsłony ogłoszenia raz na sesję.
-
----
-
-## 12. Dlaczego projekt zasługuje na dobrą ocenę
-
-Projekt jest kompletny: realizuje pełen CRUD ogłoszeń i recenzji z czytelnym, RESTowym routingiem i polskimi adresami. Walidacja jest wydzielona do klas Form Request i zawiera reguły biznesowe (jedna recenzja na ogłoszenie, zakaz recenzowania własnego mieszkania). Uprawnienia działają na trzech warstwach — middleware, Policy z `before()` dla admina i `authorize()` w żądaniach — co realnie oddziela role. Baza ma przemyślany schemat z kluczami obcymi, indeksami, ograniczeniem `unique`, kaskadami i soft-deletes. Widać dbałość o jakość kodu: komponenty Blade bez powtórzeń, akcesory i scope'y w modelach, usługi wydzielające logikę oraz automatyczne przeliczanie ocen przez zdarzenia modelu. Aplikacja jest zabezpieczona przed CSRF i sensownie reaguje na błędy 403/404/419. Są też seedery i testy. Słabe punkty (zdublowany `verify`, licznik „pomocne" na sesji) są drobne i lokalne. Całość pokazuje rozumienie architektury Laravela, a nie tylko jej odtworzenie.
-
----
-
-## 13. Co poprawić w pierwszej kolejności
-
-Uporządkować zatwierdzanie recenzji do **jednej, administracyjnej ścieżki** (punkt 5): usunąć metodę `verify` i jej trasę z poziomu użytkownika, zostawiając tylko `admin.reviews.verify` chronioną przez `auth + admin`.
-
-Dlaczego to najważniejsze: weryfikacja recenzji decyduje o wiarygodności serwisu (nadaje status „zweryfikowana"). Trzymanie jej częściowo poza panelem admina rozmywa granicę uprawnień i jest najbardziej wrażliwym punktem z perspektywy bezpieczeństwa. Skonsolidowanie usuwa duplikację, zmniejsza ryzyko błędów przy zmianach i czyni model uprawnień w pełni spójnym.
-
----
-
-## Uwaga
-
-Pytanie o porównanie z innym projektem z grupy pominięto — w archiwum jest tylko ten jeden projekt.
