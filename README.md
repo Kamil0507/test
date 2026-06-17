@@ -95,9 +95,6 @@ pusta — wypełnia danymi przykładowymi (`app/seed.py`). Tabele:
 - **Leaflet 1.9.4 + OpenStreetMap** (frontend, z CDN) – mapa kampusu z markerami budynków.
 - **HTML / CSS / JavaScript** – warstwa interfejsu (własny arkusz `style.css`).
 
-> Projekt korzysta wyłącznie z bibliotek wymienionych w `requirements.txt`
-> (pozostałe zależności instalują się automatycznie jako zależności pośrednie).
-
 ---
 
 ## Dane potrzebne do konfiguracji podczas pierwszego uruchomienia
